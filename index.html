@@ -3,15 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>学校のネットワークトラブル診断ゲーム</title>
+  <title>ネットワークトラブル診断ゲーム</title>
+
+  <!-- 丸ゴシック体「Zen Maru Gothic」（オンラインのときだけ読み込まれる）。
+       オフラインのときは style.css に書いた、端末に入っている丸ゴシック系フォントで表示される。
+       不要なら、次の3行を消してもアプリは動く。 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&display=swap">
+
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <!-- ===== ヘッダー（右上に先生モードボタン） ===== -->
+  <!-- ===== ヘッダー ===== -->
   <header class="app-header">
-    <h1>学校のネットワークトラブル診断ゲーム</h1>
-    <button id="teacher-btn" class="btn-teacher" type="button">先生モード</button>
+    <h1>ネットワークトラブル診断ゲーム</h1>
   </header>
 
   <!-- ===== メイン：左右2分割 ===== -->
@@ -19,7 +26,7 @@
 
     <!-- 左エリア：ネットワーク図（SVGはscript.jsが生成する） -->
     <section class="pane pane-left" aria-label="ネットワーク図">
-      <h2 class="pane-title">ネットワーク図</h2>
+      <h2 id="diagram-title" class="pane-title">ネットワーク図</h2>
       <div id="diagram-wrap"></div>
       <ul class="legend">
         <li><span class="dot ok"></span>正常</li>
@@ -28,7 +35,7 @@
       </ul>
     </section>
 
-    <!-- 右エリア：問題・結果・先生モードを切り替えて表示 -->
+    <!-- 右エリア：問題画面と結果画面を切り替えて表示 -->
     <section class="pane pane-right">
 
       <!-- ▼ 問題画面 -->
@@ -73,23 +80,9 @@
 
         <div id="model-box" class="model-box" hidden>
           <h3 class="sub-title">模範例</h3>
-          <p id="model-text"></p>
+          <div id="model-text"></div>
         </div>
         <button id="restart-btn" class="btn-sub" type="button" hidden>もう一度挑戦する</button>
-      </div>
-
-      <!-- ▼ 先生モード -->
-      <div id="view-teacher" hidden>
-        <h2 class="case-title">先生モード</h2>
-        <p class="note">ボタンを押すと、左のネットワーク図がすぐに変わります。「もしスイッチが故障したら？」を試してみましょう。</p>
-        <div id="teacher-buttons" class="teacher-buttons"></div>
-        <p id="teacher-summary" class="teacher-summary"></p>
-        <table class="obs-table">
-          <thead>
-            <tr><th>端末</th><th>校内の通信</th><th>インターネット</th></tr>
-          </thead>
-          <tbody id="teacher-body"></tbody>
-        </table>
       </div>
 
     </section>

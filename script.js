@@ -1,21 +1,22 @@
 'use strict';
 
 /* =====================================================
-   学校のネットワークトラブル診断ゲーム - script.js
+   ネットワークトラブル診断ゲーム - script.js
 
    【ファイルの構成】
-   1. 設定・問題データ ← 先生が問題や解説を書き換えるのはここだけ
-   2. ネットワークの仕組み（機器の接続・故障の計算）
-   3. ネットワーク図の描画
-   4. 問題画面の処理
-   5. 結果画面・振り返りの処理
-   6. 先生モードの処理
-   7. 起動処理
+   1. 設定
+   2. ネットワークの形（場所ごとの機器の並び） ← 先生が図を変えるときはここ
+   3. 問題データ                              ← 先生が問題や解説を書き換えるときはここ
+   4. 故障の計算
+   5. ネットワーク図の描画
+   6. 問題画面の処理
+   7. 結果画面・振り返りの処理
+   8. 起動処理
    ===================================================== */
 
 
 /* =====================================================
-   1. 設定・問題データ
+   1. 設定
    ===================================================== */
 
 // 振り返りの文字数（最小・最大）
@@ -25,48 +26,101 @@ const REFLECTION_MAX = 300;
 // 何回まちがえたら「答えを見る」ボタンを出すか
 const MISS_BEFORE_REVEAL = 2;
 
-// 振り返りの模範例（結果画面で「提出」後に表示）
+// 振り返りの模範例（結果画面で「提出」後に表示。1行が1段落）
 const MODEL_REFLECTION = [
   '通信できる機器と通信できない機器を比較した。',
-  'たとえばタブレットだけ通信できないときは、有線のPCが使えているので、ルーターやスイッチは正常だと考えた。',
-  'Wi-Fiだけに関係するアクセスポイントの故障だと判断した。'
+  'たとえば、タブレットだけ通信できないときは、有線のPCが使えているので、ルーターやスイッチは正常だと考えた。',
+  'そこで、Wi-Fiだけに関係するアクセスポイントの故障だと判断した。'
 ];
 
-// 選択ボタンの一覧（id は下の DEVICES の id と同じにする）
-const CHOICES = [
-  { id: 'router',   label: 'ルーター' },
-  { id: 'switch',   label: 'スイッチ' },
-  { id: 'ap',       label: 'アクセスポイント' },
-  { id: 'internet', label: 'インターネット回線' }
+
+/* =====================================================
+   2. ネットワークの形
+   ・1つの機器を { … } で書く。
+       id        : 機器の名前（半角英数字。他と重ならないように）
+       name      : 図に表示する名前
+       x, y      : 図の中の位置（図の大きさは 420 × 540）
+       parent    : 上流でつながっている機器のid（線は自動で引かれる。一番上は null）
+       kind      : 'end' = 端末（PC・スマホなど） / 'infra' = ネットワーク機器
+       hub       : 端末だけに書く。「この機器までの経路が無事なら通信できる」という機器のid
+       choiceLabel: 選択ボタンに出す名前（省略すると name が出る）
+   ===================================================== */
+
+// 学校
+const SCHOOL_NET = [
+  { id: 'internet', name: 'インターネット',   x: 210, y: 45,  parent: null,       kind: 'infra', choiceLabel: 'インターネット回線' },
+  { id: 'router',   name: 'ルーター',         x: 210, y: 150, parent: 'internet', kind: 'infra' },
+  { id: 'switch',   name: 'スイッチ',         x: 210, y: 255, parent: 'router',   kind: 'infra' },
+  { id: 'pc1',      name: 'PC1',              x: 70,  y: 365, parent: 'switch',   kind: 'end', hub: 'switch' },
+  { id: 'pc2',      name: 'PC2',              x: 210, y: 365, parent: 'switch',   kind: 'end', hub: 'switch' },
+  { id: 'ap',       name: 'アクセスポイント', x: 350, y: 365, parent: 'switch',   kind: 'infra' },
+  { id: 'tablet',   name: 'タブレット',       x: 350, y: 485, parent: 'ap',       kind: 'end', hub: 'switch' }
 ];
 
-/* ---------- 問題データ ----------
+// 家庭（Wi-Fiルーターが、ルーター・スイッチ・アクセスポイントの役割をまとめて持っている）
+const HOME_NET = [
+  { id: 'internet', name: 'インターネット', x: 210, y: 50,  parent: null,       kind: 'infra', choiceLabel: 'インターネット回線' },
+  { id: 'router',   name: 'Wi-Fiルーター',  x: 210, y: 190, parent: 'internet', kind: 'infra' },
+  { id: 'pc',       name: 'パソコン(有線)', x: 70,  y: 340, parent: 'router',   kind: 'end', hub: 'router', choiceLabel: 'パソコン' },
+  { id: 'phone',    name: 'スマホ(Wi-Fi)',  x: 210, y: 340, parent: 'router',   kind: 'end', hub: 'router', choiceLabel: 'スマホ' },
+  { id: 'printer',  name: 'プリンター',     x: 350, y: 340, parent: 'router',   kind: 'end', hub: 'router' }
+];
+
+// 部活動の会場（他校の体育館など。会場のルーターとアクセスポイントを借りる）
+const CLUB_NET = [
+  { id: 'internet', name: 'インターネット',   x: 210, y: 45,  parent: null,       kind: 'infra', choiceLabel: 'インターネット回線' },
+  { id: 'router',   name: 'ルーター',         x: 210, y: 150, parent: 'internet', kind: 'infra' },
+  { id: 'ap',       name: 'アクセスポイント', x: 210, y: 255, parent: 'router',   kind: 'infra' },
+  { id: 'tablet',   name: 'タブレット',       x: 70,  y: 365, parent: 'ap',       kind: 'end', hub: 'ap' },
+  { id: 'phone',    name: '顧問のスマホ',     x: 210, y: 365, parent: 'ap',       kind: 'end', hub: 'ap' },
+  { id: 'laptop',   name: 'ノートPC',         x: 350, y: 365, parent: 'ap',       kind: 'end', hub: 'ap' }
+];
+
+// 外出先（テーマパークなど。スマホは「基地局」か「園内Wi-Fi」のどちらかでつながる）
+const OUTING_NET = [
+  { id: 'internet', name: 'インターネット',   x: 210, y: 45,  parent: null,       kind: 'infra', choiceLabel: 'インターネット回線' },
+  { id: 'kbase',    name: '基地局',           x: 100, y: 165, parent: 'internet', kind: 'infra' },
+  { id: 'phoneA',   name: 'スマホ(モバイル)', x: 100, y: 300, parent: 'kbase',    kind: 'end', hub: 'kbase' },
+  { id: 'router',   name: 'ルーター',         x: 320, y: 165, parent: 'internet', kind: 'infra' },
+  { id: 'ap',       name: 'アクセスポイント', x: 320, y: 270, parent: 'router',   kind: 'infra' },
+  { id: 'phoneB',   name: 'スマホ(Wi-Fi)',    x: 320, y: 380, parent: 'ap',       kind: 'end', hub: 'ap' }
+];
+
+
+/* =====================================================
+   3. 問題データ
    ケースを増やすときは、下の {…} を1つコピーして書き換える。
 
+   place       : 場所（画面に表示）
    title       : 問題タイトル
+   devices     : 使うネットワークの形（上の SCHOOL_NET など）
    story       : 問題文（1行ずつ配列に入れる）
    observations: 観察結果の表。
-                 label = 表の左側に出る名前 / ok = true(○) か false(×)
+                 label = 表の左側の名前 / ok = true(○) か false(×)
                  nodes = 図の中で色をつける機器のid（色をつけない行は [] にする）
-   answer      : 正解の機器id（'router' / 'switch' / 'ap' / 'internet'）
+   choices     : 選択ボタンに出す機器のid
+   answer      : 正解の機器id
    broken      : 正解後に図で故障として表示する機器id（配列）
    hint        : まちがえたときに出す共通のヒント
-   wrongHints  : 選んだ機器ごとのヒント（まちがえた機器に合わせて出る）
+   wrongHints  : 選んだ機器ごとのヒント
    explanation : 正解後の解説（1行ずつ配列に入れる）
    point       : 学習ポイント
-*/
+   ===================================================== */
 const CASES = [
   {
+    place: '学校',
     title: 'ケース1：タブレットだけつながらない',
+    devices: SCHOOL_NET,
     story: [
       '職員室のPCはインターネットを利用できる。',
       'しかし授業用タブレットはインターネットに接続できない。'
     ],
     observations: [
-      { label: 'PC1',       ok: true,  nodes: ['pc1'] },
-      { label: 'PC2',       ok: true,  nodes: ['pc2'] },
+      { label: 'PC1',        ok: true,  nodes: ['pc1'] },
+      { label: 'PC2',        ok: true,  nodes: ['pc2'] },
       { label: 'タブレット', ok: false, nodes: ['tablet'] }
     ],
+    choices: ['router', 'switch', 'ap', 'internet'],
     answer: 'ap',
     broken: ['ap'],
     hint: 'PCは正常に通信できています。故障している機器は、タブレットだけに影響しているようです。',
@@ -83,7 +137,9 @@ const CASES = [
     point: 'アクセスポイントはWi-Fi接続を担当する'
   },
   {
+    place: '学校',
     title: 'ケース2：どの端末もつながらない',
+    devices: SCHOOL_NET,
     story: [
       'PC1もPC2もタブレットも、通信できない。',
       '校内のPC同士でファイルを共有することもできない。',
@@ -95,6 +151,7 @@ const CASES = [
       { label: 'タブレット',           ok: false, nodes: ['tablet'] },
       { label: 'ルーターの電源ランプ', ok: true,  nodes: ['router'] }
     ],
+    choices: ['router', 'switch', 'ap', 'internet'],
     answer: 'switch',
     broken: ['switch'],
     hint: '有線のPCも、Wi-Fiのタブレットも通信できません。全員がつながる「中心」の機器を考えてみましょう。',
@@ -110,58 +167,107 @@ const CASES = [
     point: 'スイッチはLAN内の通信を支える'
   },
   {
-    title: 'ケース3：Webサイトだけ見られない',
+    place: '家庭',
+    title: 'ケース3：家じゅうの機器がつながらない',
+    devices: HOME_NET,
     story: [
-      '校内のPC同士は通信できる。',
-      'しかしWebサイトには接続できない。',
-      'ルーターの設定画面（校内のPCから開く画面）も開けない。'
+      '自宅で、パソコンもスマホもプリンターも、インターネットにつながらない。',
+      'スマホからプリンターに印刷することもできない。',
+      'Wi-Fiルーターの電源ランプが消えている。'
     ],
     observations: [
-      { label: '校内PC同士の通信',       ok: true,  nodes: ['pc1', 'pc2'] },
-      { label: 'Webサイトの閲覧',        ok: false, nodes: [] },
-      { label: 'ルーターの設定画面を開く', ok: false, nodes: [] }
+      { label: 'パソコン（有線）',          ok: false, nodes: ['pc'] },
+      { label: 'スマホ（Wi-Fi）',           ok: false, nodes: ['phone'] },
+      { label: 'プリンター',                ok: false, nodes: ['printer'] },
+      { label: 'スマホからプリンターへ印刷', ok: false, nodes: [] }
     ],
+    choices: ['router', 'internet', 'pc', 'phone'],
     answer: 'router',
     broken: ['router'],
-    hint: '校内の通信はできるのに、外（インターネット）にだけ出られません。「校内」と「外」の境目にある機器を考えてみましょう。',
+    hint: 'パソコン・スマホ・プリンターのすべてがつながりません。全部に共通して使っている機器はどれでしょう？',
     wrongHints: {
-      switch:   'スイッチが壊れると、校内のPC同士も通信できなくなるはずです。',
-      ap:       'アクセスポイントの故障で困るのは、Wi-Fiのタブレットだけです。',
-      internet: '回線の故障でもWebは見られませんが、そのときルーターの設定画面は開けるはずです。'
+      internet: '回線が切れても、家の中のスマホからプリンターに印刷することはできるはずです。今は印刷もできません。',
+      pc:       'パソコンだけが壊れても、スマホやプリンターまでつながらなくなる理由を説明できません。',
+      phone:    'スマホだけが壊れても、有線のパソコンやプリンターがつながらない理由を説明できません。'
     },
     explanation: [
-      'ルーターはLANとインターネットを接続する機器です。',
-      '故障すると、校内（LAN内）の通信はできても、外のWebサイトには出られません。'
+      '家庭のWi-Fiルーターは、ルーター・スイッチ・アクセスポイントの役割を1台でまとめて持っていることが多い機器です。',
+      'そのため故障すると、有線のパソコンもWi-Fiのスマホも、家の中の通信もインターネットへの接続も、すべて使えなくなります。'
     ],
-    point: 'ルーターはLANとインターネットを接続する'
+    point: '家庭のルーターは、家の中の通信と外への接続の両方を担当する'
+  },
+  {
+    place: '部活動の会場',
+    title: 'ケース4：Webサイトだけ見られない',
+    devices: CLUB_NET,
+    story: [
+      '他校の体育館で練習試合。会場のWi-Fiを借りて、タブレットで試合を記録している。',
+      'Wi-Fiには接続でき、タブレット・スマホ・PCの間でデータを共有することもできる。',
+      'しかしWebサイトは開けない。',
+      '会場のルーターは電源ランプが点灯していて、設定画面も開ける。'
+    ],
+    observations: [
+      { label: '会場内の機器どうしのデータ共有',   ok: true,  nodes: ['tablet', 'phone'] },
+      { label: 'Wi-Fiへの接続',                    ok: true,  nodes: ['ap'] },
+      { label: 'ルーターのランプ・設定画面',        ok: true,  nodes: ['router'] },
+      { label: 'Webサイトの閲覧',                  ok: false, nodes: [] }
+    ],
+    choices: ['router', 'ap', 'internet'],
+    answer: 'internet',
+    broken: ['internet'],
+    hint: '会場の中の通信はできています。会場の機器を1つずつ確かめると、どの機器が動いていると言えるでしょう？',
+    wrongHints: {
+      router: 'ルーターの電源ランプは点灯し、設定画面も開けます。ルーターは動いていると考えられます。',
+      ap:     'Wi-Fiには接続でき、機器どうしのデータ共有もできています。アクセスポイントは動いています。'
+    },
+    explanation: [
+      'インターネット回線は、会場のルーターと外のインターネットをつなぐ道です。',
+      'ここが切れると、会場の中（LAN内）の通信はできても、Webサイトには出られません。',
+      'ルーターやアクセスポイントが動いていることを確かめられたのが、手がかりでした。'
+    ],
+    point: 'インターネット回線が切れても、LAN内の通信は続けられる'
+  },
+  {
+    place: '外出先',
+    title: 'ケース5：テーマパークでスマホが圏外',
+    devices: OUTING_NET,
+    story: [
+      'テーマパーク（ディズニーランドなど）で遊んでいる。',
+      'スマホのモバイル通信では、アプリもWebも使えない。まわりの友だちも同じ状態だ。',
+      '一方、園内Wi-Fiにつないだスマホは、ふつうにWebを見られる。'
+    ],
+    observations: [
+      { label: '自分のスマホ（モバイル通信）',       ok: false, nodes: ['phoneA'] },
+      { label: 'まわりの人のスマホ（モバイル通信）', ok: false, nodes: [] },
+      { label: '園内Wi-Fiにつないだスマホ',          ok: true,  nodes: ['phoneB'] }
+    ],
+    choices: ['kbase', 'router', 'ap', 'internet'],
+    answer: 'kbase',
+    broken: ['kbase'],
+    hint: 'Wi-Fi経由のスマホは使えて、モバイル通信のスマホだけが使えません。モバイル通信だけが通る場所を考えてみましょう。',
+    wrongHints: {
+      router:   '園内Wi-Fiのルーターが壊れたら、Wi-Fi経由のスマホも使えなくなるはずです。Wi-Fiは使えています。',
+      ap:       'アクセスポイントが壊れたら、Wi-Fiにつながらないはずです。使えないのはモバイル通信のほうです。',
+      internet: 'インターネット全体が切れたら、Wi-Fi経由のスマホでもWebを見られないはずです。'
+    },
+    explanation: [
+      'スマホのモバイル通信は、近くの基地局（電波を送受信する設備）を通してインターネットにつながります。',
+      '基地局が故障すると、その周辺のスマホは圏外になります。',
+      'Wi-Fiは別の経路（ルーターとアクセスポイント）を使うので、影響を受けません。'
+    ],
+    point: '外出先のモバイル通信は、基地局を経由してつながる'
   }
 ];
 
 
 /* =====================================================
-   2. ネットワークの仕組み
+   4. 故障の計算
    ===================================================== */
 
-/* 機器の一覧。
-   x, y   : 図の中での位置
-   parent : つながっている上流の機器（線はここから自動で引かれる）
-   kind   : 'end' = 端末（PC・タブレット） / 'infra' = ネットワーク機器 */
-const DEVICES = [
-  { id: 'internet', name: 'インターネット',   x: 210, y: 45,  parent: null,       kind: 'infra' },
-  { id: 'router',   name: 'ルーター',         x: 210, y: 150, parent: 'internet', kind: 'infra' },
-  { id: 'switch',   name: 'スイッチ',         x: 210, y: 255, parent: 'router',   kind: 'infra' },
-  { id: 'pc1',      name: 'PC1',              x: 70,  y: 365, parent: 'switch',   kind: 'end' },
-  { id: 'pc2',      name: 'PC2',              x: 210, y: 365, parent: 'switch',   kind: 'end' },
-  { id: 'ap',       name: 'アクセスポイント', x: 350, y: 365, parent: 'switch',   kind: 'infra' },
-  { id: 'tablet',   name: 'タブレット',       x: 350, y: 485, parent: 'ap',       kind: 'end' }
-];
-
-// id から機器を引くための辞書
-const DEV = {};
-DEVICES.forEach(function (d) { DEV[d.id] = d; });
+let DEV = {};   // 今のケースの機器を id で引くための辞書（renderCase で作る）
 
 /* 自分から上流へたどって、途中に故障機器がないか調べる。
-   stopId まで（stopIdも含む）調べる。stopId が null なら一番上（インターネット）まで調べる。 */
+   stopId まで（stopIdも含む）調べる。stopId が無ければ一番上まで調べる。 */
 function pathClear(id, stopId, broken) {
   let cur = id;
   while (cur) {
@@ -172,45 +278,40 @@ function pathClear(id, stopId, broken) {
   return true;
 }
 
-/* 故障している機器のリスト broken から、図に必要な状態をすべて計算する。
+/* 故障している機器のリスト broken から、図の色を計算する。
    戻り値：
      nodeStatus … 機器ごとの 'ok' / 'ng'
-     edgeStatus … 通信線ごとの 'ok' / 'ng'（キーは線の下側の機器id）
-     table      … 端末ごとの「校内の通信」「インターネット」の可否 */
-function simulate(broken) {
+     edgeStatus … 通信線ごとの 'ok' / 'ng'（キーは線の下側の機器id） */
+function simulate(devices, broken) {
   const nodeStatus = {};
   const edgeStatus = {};
-  const table = [];
 
-  DEVICES.forEach(function (d) {
-    // 端末は、スイッチまでの経路が切れていたら「通信できない」
-    const lan = d.kind === 'end' ? pathClear(d.id, 'switch', broken) : true;
+  devices.forEach(function (d) {
+    // 端末は、hub（中心の機器）までの経路が切れていたら「通信できない」
+    const linkOk = d.kind === 'end' ? pathClear(d.id, d.hub, broken) : true;
 
-    nodeStatus[d.id] = (broken.includes(d.id) || !lan) ? 'ng' : 'ok';
+    nodeStatus[d.id] = (broken.includes(d.id) || !linkOk) ? 'ng' : 'ok';
 
     if (d.parent) {
-      const bad = broken.includes(d.id) || broken.includes(d.parent) || !lan;
+      const bad = broken.includes(d.id) || broken.includes(d.parent) || !linkOk;
       edgeStatus[d.id] = bad ? 'ng' : 'ok';
-    }
-    if (d.kind === 'end') {
-      table.push({ name: d.name, lan: lan, net: pathClear(d.id, null, broken) });
     }
   });
 
-  return { nodeStatus: nodeStatus, edgeStatus: edgeStatus, table: table };
+  return { nodeStatus: nodeStatus, edgeStatus: edgeStatus };
 }
 
 
 /* =====================================================
-   3. ネットワーク図の描画（SVGをJavaScriptで作る）
+   5. ネットワーク図の描画（SVGをJavaScriptで作る）
    ===================================================== */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const NODE_W = 124;   // 機器カードの幅
 const NODE_H = 54;    // 機器カードの高さ
-const nodeEls = {};   // 機器id → <g>要素
-const edgeEls = {};   // 機器id → <line>要素
-const statusEls = {}; // 機器id → 状態表示の<text>要素
+let nodeEls = {};     // 機器id → <g>要素
+let edgeEls = {};     // 機器id → <line>要素
+let statusEls = {};   // 機器id → 状態表示の<text>要素
 
 // 状態に応じて、カードに書く文字（色だけに頼らないため）
 const LABEL_INFRA = { ok: '正常', ng: '故障', unknown: '未確認' };
@@ -222,12 +323,13 @@ function svgEl(name, attrs) {
   return e;
 }
 
-// 図を最初に1回だけ作る
-function buildDiagram() {
-  const svg = svgEl('svg', { viewBox: '0 0 420 540', role: 'img', 'aria-label': '学校のネットワーク図' });
+// 図を作る（ケースが変わるたびに作り直す）
+function buildDiagram(devices) {
+  nodeEls = {}; edgeEls = {}; statusEls = {};
+  const svg = svgEl('svg', { viewBox: '0 0 420 540', role: 'img', 'aria-label': 'ネットワーク図' });
 
   // 通信線（先に描いてカードの後ろに回す）
-  DEVICES.forEach(function (d) {
+  devices.forEach(function (d) {
     if (!d.parent) return;
     const p = DEV[d.parent];
     const line = svgEl('line', {
@@ -240,11 +342,11 @@ function buildDiagram() {
   });
 
   // 機器カード
-  DEVICES.forEach(function (d) {
+  devices.forEach(function (d) {
     const g = svgEl('g', { 'class': 'node unknown' });
     g.appendChild(svgEl('rect', {
       x: d.x - NODE_W / 2, y: d.y - NODE_H / 2,
-      width: NODE_W, height: NODE_H, rx: 10
+      width: NODE_W, height: NODE_H, rx: 12
     }));
     const name = svgEl('text', { x: d.x, y: d.y - 4, 'class': 'node-name' });
     name.textContent = d.name;
@@ -256,14 +358,16 @@ function buildDiagram() {
     statusEls[d.id] = st;
   });
 
-  document.getElementById('diagram-wrap').appendChild(svg);
+  const wrap = document.getElementById('diagram-wrap');
+  wrap.textContent = '';
+  wrap.appendChild(svg);
 }
 
 /* 図に色をつける。
-   nodeStatus / edgeStatus : { 機器id: 'ok' | 'ng' | 'unknown' }（無い機器は 'unknown'）
+   nodeStatus / edgeStatus : { 機器id: 'ok' | 'ng' }（無い機器は 'unknown'＝灰色）
    selectedId : 選択中の機器id（なければ null） */
 function paintDiagram(nodeStatus, edgeStatus, selectedId) {
-  DEVICES.forEach(function (d) {
+  state.devices.forEach(function (d) {
     const s = nodeStatus[d.id] || 'unknown';
     const labels = d.kind === 'end' ? LABEL_END : LABEL_INFRA;
     nodeEls[d.id].setAttribute('class', 'node ' + s + (d.id === selectedId ? ' selected' : ''));
@@ -274,11 +378,10 @@ function paintDiagram(nodeStatus, edgeStatus, selectedId) {
   });
 }
 
-// 故障機器 broken を反映した図を表示する
+// 故障機器 broken を反映した図を表示する（[] なら全部正常）
 function paintScenario(broken) {
-  const r = simulate(broken);
+  const r = simulate(state.devices, broken);
   paintDiagram(r.nodeStatus, r.edgeStatus, null);
-  return r;
 }
 
 // 問題を解いている最中の図（観察できた端末だけ色がつき、他は灰色）
@@ -293,18 +396,17 @@ function paintQuestion() {
 
 
 /* =====================================================
-   4. 問題画面の処理
+   6. 問題画面の処理
    ===================================================== */
 
 // アプリ全体の状態
 const state = {
-  view: 'game',      // 'game'（問題）か 'result'（結果）
-  teacher: false,    // 先生モードか
   caseIndex: 0,      // 今のケース番号（0始まり）
+  devices: [],       // 今のケースの機器一覧
   selected: null,    // 選んでいる機器id
   attempts: 0,       // 今のケースで診断した回数
   solved: false,     // 今のケースが終わったか
-  results: []        // ケースごとの結果 { title, firstTry }
+  results: []        // ケースごとの結果 { place, title, firstTry }
 };
 
 const $ = function (id) { return document.getElementById(id); };
@@ -317,33 +419,26 @@ function el(tag, cls, text) {
   return e;
 }
 
-// 右エリアの表示を切り替える（'game' / 'result' / 'teacher'）
+// 右エリアの表示を切り替える（'game' か 'result'）
 function showView(name) {
   $('view-game').hidden = name !== 'game';
   $('view-result').hidden = name !== 'result';
-  $('view-teacher').hidden = name !== 'teacher';
-}
-
-// 選択ボタンを作る
-function buildChoices() {
-  const box = $('choices');
-  CHOICES.forEach(function (c) {
-    const b = el('button', 'choice-btn', c.label);
-    b.type = 'button';
-    b.dataset.id = c.id;
-    b.addEventListener('click', function () { onChoose(c.id); });
-    box.appendChild(b);
-  });
 }
 
 // ケースを画面に表示する
 function renderCase() {
   const c = CASES[state.caseIndex];
+  state.devices = c.devices;
   state.selected = null;
   state.attempts = 0;
   state.solved = false;
 
-  $('case-progress').textContent = 'ケース ' + (state.caseIndex + 1) + ' / ' + CASES.length;
+  DEV = {};
+  c.devices.forEach(function (d) { DEV[d.id] = d; });
+  buildDiagram(c.devices);
+
+  $('diagram-title').textContent = 'ネットワーク図（' + c.place + '）';
+  $('case-progress').textContent = 'ケース ' + (state.caseIndex + 1) + ' / ' + CASES.length + '　場所：' + c.place;
   $('case-title').textContent = c.title;
 
   const story = $('story');
@@ -359,12 +454,25 @@ function renderCase() {
     body.appendChild(tr);
   });
 
+  // 選択ボタンを、このケースの候補で作り直す
+  const box = $('choices');
+  box.textContent = '';
+  c.choices.forEach(function (id) {
+    const d = DEV[id];
+    const b = el('button', 'choice-btn', d.choiceLabel || d.name);
+    b.type = 'button';
+    b.dataset.id = id;
+    b.addEventListener('click', function () { onChoose(id); });
+    box.appendChild(b);
+  });
+
   $('feedback').hidden = true;
   $('next-btn').hidden = true;
   $('reveal-btn').hidden = true;
   $('diagnose-btn').hidden = false;
   updateChoiceButtons();
   paintQuestion();
+  window.scrollTo(0, 0);
 }
 
 // 選択ボタンの見た目と「診断する」の有効・無効を更新
@@ -400,14 +508,14 @@ function showFeedback(kind, title, paragraphs, point, think) {
 function onDiagnose() {
   if (!state.selected || state.solved) return;
   const c = CASES[state.caseIndex];
-  const choice = CHOICES.find(function (x) { return x.id === state.selected; });
+  const chosen = DEV[state.selected];
   state.attempts += 1;
 
   if (state.selected === c.answer) {
     // ---- 正解 ----
     finishCase(false);
     showFeedback('ok', '正解！',
-      [choice.label + 'が故障しています。'].concat(c.explanation),
+      [(chosen.choiceLabel || chosen.name) + 'が故障しています。'].concat(c.explanation),
       c.point,
       '考えてみよう：観察結果のどこを比べて、この機器だと判断できた？　隣の人に説明してみよう。');
   } else {
@@ -424,9 +532,9 @@ function onDiagnose() {
 // 「答えを見る」を押したとき（この場合は不正解扱い）
 function onReveal() {
   const c = CASES[state.caseIndex];
-  const ans = CHOICES.find(function (x) { return x.id === c.answer; });
+  const ans = DEV[c.answer];
   finishCase(true);
-  showFeedback('ok', '答えは「' + ans.label + '」です',
+  showFeedback('ok', '答えは「' + (ans.choiceLabel || ans.name) + '」です',
     c.explanation, c.point,
     '考えてみよう：どの観察結果に注目すれば、この答えにたどりつけたかな？');
 }
@@ -435,7 +543,7 @@ function onReveal() {
 function finishCase(revealed) {
   const c = CASES[state.caseIndex];
   state.solved = true;
-  state.results.push({ title: c.title, firstTry: !revealed && state.attempts === 1 });
+  state.results.push({ place: c.place, title: c.title, firstTry: !revealed && state.attempts === 1 });
 
   paintScenario(c.broken);   // 故障機器と影響を受ける通信線を赤くする
   updateChoiceButtons();
@@ -459,11 +567,10 @@ function onNext() {
 
 
 /* =====================================================
-   5. 結果画面・振り返りの処理
+   7. 結果画面・振り返りの処理
    ===================================================== */
 
 function showResult() {
-  state.view = 'result';
   const total = state.results.length;
   const correct = state.results.filter(function (r) { return r.firstTry; }).length;
   const rate = total === 0 ? 0 : Math.round(correct / total * 100);
@@ -474,7 +581,8 @@ function showResult() {
   const list = $('res-list');
   list.textContent = '';
   state.results.forEach(function (r) {
-    list.appendChild(el('li', '', r.title + '　' + (r.firstTry ? '○ 最初の回答で正解' : '△ 何度か考えて解決')));
+    list.appendChild(el('li', '', '【' + r.place + '】' + r.title + '　' +
+      (r.firstTry ? '○ 最初の回答で正解' : '△ 何度か考えて解決')));
   });
 
   // 振り返り欄を初期状態に戻す
@@ -488,13 +596,13 @@ function showResult() {
 
   showView('result');
   paintScenario([]);   // 図は「全正常」の状態にしておく
+  window.scrollTo(0, 0);
 }
 
 // 文字数の表示と、提出ボタンの有効・無効
 function updateCharCount() {
   const len = $('reflection').value.length;
-  const msg = len + ' / ' + REFLECTION_MAX + '文字（' + REFLECTION_MIN + '文字以上で提出できます）';
-  $('char-count').textContent = msg;
+  $('char-count').textContent = len + ' / ' + REFLECTION_MAX + '文字（' + REFLECTION_MIN + '文字以上で提出できます）';
   $('submit-btn').disabled = len < REFLECTION_MIN;
 }
 
@@ -512,7 +620,6 @@ function onSubmit() {
 
 // 「もう一度挑戦する」
 function onRestart() {
-  state.view = 'game';
   state.caseIndex = 0;
   state.results = [];
   showView('game');
@@ -521,87 +628,13 @@ function onRestart() {
 
 
 /* =====================================================
-   6. 先生モードの処理
-   ===================================================== */
-
-// 先生モードのボタン（増やしたいときはここに1行足す）
-const TEACHER_SCENARIOS = [
-  { label: 'ルーター故障',           broken: ['router'] },
-  { label: 'スイッチ故障',           broken: ['switch'] },
-  { label: 'アクセスポイント故障',   broken: ['ap'] },
-  { label: 'インターネット回線故障', broken: ['internet'] },
-  { label: '全正常',                 broken: [] }
-];
-
-function buildTeacherButtons() {
-  const box = $('teacher-buttons');
-  TEACHER_SCENARIOS.forEach(function (s, i) {
-    const b = el('button', '', s.label);
-    b.type = 'button';
-    b.addEventListener('click', function () { applyScenario(i); });
-    box.appendChild(b);
-  });
-}
-
-// 選んだ故障パターンを図と表に反映する
-function applyScenario(index) {
-  const s = TEACHER_SCENARIOS[index];
-  const r = paintScenario(s.broken);
-
-  document.querySelectorAll('#teacher-buttons button').forEach(function (b, i) {
-    b.classList.toggle('active', i === index);
-  });
-
-  // 影響を受ける端末の一覧
-  const affected = r.table.filter(function (t) { return !t.lan || !t.net; })
-                          .map(function (t) { return t.name; });
-  $('teacher-summary').textContent = s.broken.length === 0
-    ? '故障はありません。すべて正常です。'
-    : '影響を受ける端末：' + (affected.length ? affected.join('、') : 'なし');
-
-  const body = $('teacher-body');
-  body.textContent = '';
-  r.table.forEach(function (t) {
-    const tr = el('tr');
-    tr.appendChild(el('td', '', t.name));
-    tr.appendChild(el('td', 'mark ' + (t.lan ? 'ok' : 'ng'), t.lan ? '○' : '×'));
-    tr.appendChild(el('td', 'mark ' + (t.net ? 'ok' : 'ng'), t.net ? '○' : '×'));
-    body.appendChild(tr);
-  });
-}
-
-// 先生モードの入り・出
-function toggleTeacher() {
-  state.teacher = !state.teacher;
-  $('teacher-btn').classList.toggle('active', state.teacher);
-  $('teacher-btn').textContent = state.teacher ? '先生モードを終了' : '先生モード';
-
-  if (state.teacher) {
-    showView('teacher');
-    applyScenario(TEACHER_SCENARIOS.length - 1);   // 最初は「全正常」
-  } else {
-    showView(state.view);
-    // 元の画面に合わせて図を戻す
-    if (state.view === 'result') paintScenario([]);
-    else if (state.solved) paintScenario(CASES[state.caseIndex].broken);
-    else paintQuestion();
-  }
-}
-
-
-/* =====================================================
-   7. 起動処理
+   8. 起動処理
    ===================================================== */
 
 function init() {
-  buildDiagram();
-  buildChoices();
-  buildTeacherButtons();
-
   $('diagnose-btn').addEventListener('click', onDiagnose);
   $('reveal-btn').addEventListener('click', onReveal);
   $('next-btn').addEventListener('click', onNext);
-  $('teacher-btn').addEventListener('click', toggleTeacher);
   $('reflection').maxLength = REFLECTION_MAX;
   $('reflection').addEventListener('input', updateCharCount);
   $('submit-btn').addEventListener('click', onSubmit);
